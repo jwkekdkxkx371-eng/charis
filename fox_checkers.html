@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Fox Checkers Arena</title>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #1a1a1a;
+    color: #eee;
+    font-family: -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 10px;
+  }
+  h1 { color: #d4af37; font-size: 22px; margin-bottom: 10px; }
+  
+  #menu {
+    width: 100%;
+    max-width: 400px;
+    background: #252525;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+  }
+  #menu button {
+    width: 100%;
+    padding: 12px;
+    margin: 5px 0;
+    background: #d4af37;
+    color: #000;
+    border: none;
+    border-radius: 5px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  #menu button.secondary { background: #555; color: #fff; }
+  #menu input {
+    width: 100%;
+    padding: 10px;
+    margin: 5px 0;
+    background: #111;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 5px;
+    font-size: 14px;
+  }
+  
+  #gameArea { display: none; width: 100%; max-width: 400px; }
+  
+  #status {
+    background: #252525;
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    text-align: center;
+    font-weight: bold;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  #board {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    grid-template-rows: repeat(10, 1fr);
+    aspect-ratio: 1;
+    width: 100%;
+    border: 3px solid #5c4033;
+    background: #5c4033;
+    gap: 1px;
+  }
+  
+  .cell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+  .cell.light { background: #f0d9b5; }
+  .cell.dark { background: #b58863; }
+  .cell.highlight { background: #7fc97f !important; }
+  .cell.last-move { background: #cdd26a !important; }
+  
+  .piece {
+    position: absolute;
+    width: 85%;
+    height: 85%;
+    top: 7.5%;
+    left: 7.5%;
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    transition: transform 0.15s;
+  }
+  .piece.white {
+    background: radial-gradient(circle at 30% 30%, #fff, #ccc);
+    border: 2px solid #999;
+  }
+  .piece.black {
+    background: radial-gradient(circle at 30% 30%, #555, #111);
+    border: 2px solid #000;
+  }
+  .piece.selected {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 3px #ffeb3b, 0 4px 8px rgba(0,0,0,0.5);
+    z-index: 10;
+  }
+  .piece.king::after {
+    content: '♛';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 20px;
+    color: gold;
+    text-shadow: 0 1px 2px #000;
+  }
+  .piece.black.king::after { color: #ffd700; }
+  
+  #info {
+    margin-top: 10px;
+    padding: 10px;
+    background: #252525;
+    border-radius: 5px;
+    font-size: 13px;
+    word-break: break-all;
+  }
+  #info code { color: #d4af37; }
+</style>
+</head>
+<body>
+
+<h1>🦊 Fox Checkers Arena</h1>
+
+<div id="menu">
+  <button onclick="startLocal()">Играть локально (2 игрока)</button>
+  <button onclick="hostGame()">Создать комнату (P2P)</button>
+  <input type="text" id="roomIdInput" placeholder="Вставь ID комнаты друга">
+  <button class="secondary" onclick="joinGame()">Присоединиться</button>
+  <div id="roomInfo" style="margin-top:10px; font-size:13px; color:#aaa;"></div>
+</div>
+
+<div id="gameArea">
+  <div id="status">Белые ходят</div>
+  <div id="board"></div>
+  <div id="info"></div>
+  <button onclick="location.reload()" style="width:100%; padding:10px; margin-top:10px; background:#555; color:#fff; border:none; border-radius:5px;">Выйти в меню</button>
+</div>
+
+<script>
+// ===== ЛОГИКА ШАШЕК (10x10, международные правила) =====
+const SIZE = 10;
+let board = []; // 0=empty, 1=white, 2=black, 3=whiteKing, 4=blackKing
+let turn = 1; // 1=white, 2=black
+let selected = null;
+let validMoves = [];
+let mustCapture = false;
+let localMode = false;
+let myColor = 1; // в P2P
+
+function initBoard() {
+  board = Array(SIZE).fill(null).map(() => Array(SIZE).fill(0));
+  // Черные сверху (ряды 0-3), белые снизу (ряды 6-9)
+  for (let y = 0; y < 4; y++)
+    for (let x = 0; x < SIZE; x++)
+      if ((x + y) % 2 === 1) board[y][x] = 2;
+  for (let y = 6; y < SIZE; y++)
+    for (let x = 0; x < SIZE; x++)
+      if ((x + y) % 2 === 1) board[y][x] = 1;
+}
+
+function getPiece(x, y) {
+  if (x < 0 || x >= SIZE || y < 0 || y >= SIZE) return null;
+  return board[y][x];
+}
+
+function isWhite(p) { return p === 1 || p === 3; }
+function isBlack(p) { return p === 2 || p === 4; }
+function isKing(p) { return p === 3 || p === 4; }
+function isOwn(p, player) {
+  if (player === 1) return isWhite(p);
+  return isBlack(p);
+}
+function isEnemy(p, player) {
+  if (p === 0) return false;
+  return !isOwn(p, player);
+}
+
+// Получить все ходы для игрока (с учетом обязательной рубки)
+function getAllMoves(player) {
+  const captures = [];
+  const simple = [];
+  
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const p = board[y][x];
+      if (!isOwn(p, player)) continue;
+      
+      if (isKing(p)) {
+        // Дамка: ходит на любое расстояние по диагонали
+        const dirs = [[-1,-1],[-1,1],[1,-1],[1,1]];
+        for (let [dy, dx] of dirs) {
+          let nx = x + dx, ny = y + dy;
+          let captured = null;
+          while (nx >= 0 && nx < SIZE && ny >= 0 && ny < SIZE) {
+            const cell = board[ny][nx];
+            if (cell === 0) {
+              if (captured) {
+                captures.push({from:{x,y}, to:{x:nx,y:ny}, captured, isKing:true});
+              } else {
+                simple.push({from:{x,y}, to:{x:nx,y:ny}, isKing:true});
+              }
+            } else if (isEnemy(cell, player)) {
+              if (captured) break; // уже есть одна фигура на пути
+              captured = {x:nx, y:ny};
+            } else {
+              break; // своя фигура
+            }
+            nx += dx; ny += dy;
+          }
+        }
+      } else {
+        // Обычная шашка
+        const fwd = (player === 1) ? -1 : 1;
+        // Ходы вперед
+        for (let dx of [-1, 1]) {
+          const nx = x + dx, ny = y + fwd;
+          if (nx >= 0 && nx < SIZE && ny >= 0 && ny < SIZE && board[ny][nx] === 0) {
+            simple.push({from:{x,y}, to:{x:nx,y:ny}});
+          }
+        }
+        // Рубки во все стороны
+        for (let [dy, dx] of [[-1,-1],[-1,1],[1,-1],[1,1]]) {
+          const mx = x + dx, my = y + dy;
+          const lx = x + dx*2, ly = y + dy*2;
+          if (lx >= 0 && lx < SIZE && ly >= 0 && ly < SIZE &&
+              board[my][mx] !== 0 && isEnemy(board[my][mx], player) &&
+              board[ly][lx] === 0) {
+            captures.push({from:{x,y}, to:{x:lx,y:ly}, captured:{x:mx,y:my}});
+          }
+        }
+      }
+    }
+  }
+  
+  // Обязательная рубка
+  if (captures.length > 0) return captures;
+  return simple;
+}
+
+function applyMove(move) {
+  const p = board[move.from.y][move.from.x];
+  board[move.from.y][move.from.x] = 0;
+  board[move.to.y][move.to.x] = p;
+  if (move.captured) board[move.captured.y][move.captured.x] = 0;
+  
+  // Превращение в дамку
+  if (p === 1 && move.to.y === 0) board[move.to.y][move.to.x] = 3;
+  if (p === 2 && move.to.y === SIZE-1) board[move.to.y][move.to.x] = 4;
+}
+
+function undoMove(move, capturedVal) {
+  const p = board[move.to.y][move.to.x];
+  board[move.to.y][move.to.x] = 0;
+  board[move.from.y][move.from.x] = p;
+  if (move.captured) board[move.captured.y][move.captured.x] = capturedVal;
+}
+
+// ===== ОТРИСОВКА =====
+function render() {
+  const boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+  
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell ' + ((x + y) % 2 === 0 ? 'light' : 'dark');
+      cell.dataset.x = x;
+      cell.dataset.y = y;
+      
+      // Подсветка возможных ходов
+      if (selected && validMoves.some(m => m.to.x === x && m.to.y === y)) {
+        cell.classList.add('highlight');
+      }
+      
+      const p = board[y][x];
+      if (p !== 0) {
+        const piece = document.createElement('div');
+        piece.className = 'piece';
+        if (isWhite(p)) piece.classList.add('white');
+        else piece.classList.add('black');
+        if (isKing(p)) piece.classList.add('king');
+        if (selected && selected.x === x && selected.y === y) {
+          piece.classList.add('selected');
+        }
+        cell.appendChild(piece);
+      }
+      
+      cell.addEventListener('click', () => onCellClick(x, y));
+      boardEl.appendChild(cell);
+    }
+  }
+  
+  updateStatus();
+}
+
+function updateStatus() {
+  const status = document.getElementById('status');
+  const moves = getAllMoves(turn);
+  if (moves.length === 0) {
+    status.innerText = (turn === 1 ? 'Черные' : 'Белые') + ' победили!';
+    return;
+  }
+  status.innerText = (turn === 1 ? 'Ход белых' : 'Ход черных') + 
+    (mustCapture ? ' (обязательная рубка!)' : '');
+}
+
+// ===== ВЗАИМОДЕЙСТВИЕ =====
+function onCellClick(x, y) {
+  if (localMode) {
+    // В локальном режиме ходят оба игрока по очереди
+  } else {
+    if (turn !== myColor) return; // не твой ход
+  }
+  
+  const p = board[y][x];
+  
+  // Если кликнули на свою фигуру — выбрать её
+  if (isOwn(p, turn)) {
+    const moves = getAllMoves(turn).filter(m => m.from.x === x && m.from.y === y);
+    if (moves.length > 0) {
+      selected = {x, y};
+      validMoves = moves;
+      render();
+      return;
+    }
+  }
+  
+  // Если кликнули на подсвеченную клетку — сделать ход
+  if (selected) {
+    const move = validMoves.find(m => m.to.x === x && m.to.y === y);
+    if (move) {
+      executeMove(move);
+      return;
+    }
+  }
+  
+  // Снять выделение
+  selected = null;
+  validMoves = [];
+  render();
+}
+
+function executeMove(move) {
+  applyMove(move);
+  selected = null;
+  validMoves = [];
+  
+  // Проверка: можно ли рубить дальше той же фигурой
+  const furtherCaptures = getAllMoves(turn).filter(m => 
+    m.from.x === move.to.x && m.from.y === move.to.y && m.captured
+  );
+  
+  if (furtherCaptures.length > 0) {
+    // Обязательная цепочка рубок
+    mustCapture = true;
+    selected = {x: move.to.x, y: move.to.y};
+    validMoves = furtherCaptures;
+    render();
+    if (conn) sendState();
+    return;
+  }
+  
+  mustCapture = false;
+  turn = turn === 1 ? 2 : 1;
+  render();
+  if (conn) sendState();
+}
+
+// ===== P2P ЧЕРЕЗ PEERJS =====
+let peer = null;
+let conn = null;
+let isHost = false;
+
+function startLocal() {
+  localMode = true;
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('gameArea').style.display = 'block';
+  initBoard();
+  render();
+}
+
+function hostGame() {
+  isHost = true;
+  myColor = 1; // хост играет белыми
+  peer = new Peer();
+  peer.on('open', id => {
+    document.getElementById('roomInfo').innerHTML = 
+      `Твой ID: <code>${id}</code><br>Отправь его другу`;
+  });
+  peer.on('connection', c => {
+    conn = c;
+    setupConnection();
+  });
+}
+
+function joinGame() {
+  const id = document.getElementById('roomIdInput').value.trim();
+  if (!id) { alert('Вставь ID'); return; }
+  isHost = false;
+  myColor = 2; // гость играет черными
+  peer = new Peer();
+  peer.on('open', () => {
+    conn = peer.connect(id);
+    setupConnection();
+  });
+}
+
+function setupConnection() {
+  conn.on('open', () => {
+    document.getElementById('menu').style.display = 'none';
+    document.getElementById('gameArea').style.display = 'block';
+    if (isHost) {
+      initBoard();
+      render();
+      sendState();
+    }
+    document.getElementById('info').innerHTML = 
+      `Подключено. Ты играешь за <b>${myColor === 1 ? 'белых' : 'черных'}</b>`;
+  });
+  conn.on('data', data => {
+    if (data.type === 'state') {
+      board = data.board;
+      turn = data.turn;
+      mustCapture = data.mustCapture || false;
+      render();
+    }
+  });
+}
+
+function sendState() {
+  if (!conn) return;
+  conn.send({ type: 'state', board, turn, mustCapture });
+}
+</script>
+</body>
+  </html>
